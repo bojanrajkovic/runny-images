@@ -180,7 +180,11 @@ Write-Host '== stage 7: smoke test =='
 # --- Stage 8: pack ---
 Write-Host '== stage 8: pack to OCI layout =='
 $layout = Join-Path $OutDir 'oci-layout'
-& $RunnyctlPath image pack $workVhdx --os windows --arch amd64 --oci-layout $layout
+# cpu/memory here are the image's baked defaults, overridable per-slot by the
+# consumer's pool config -- 2 vCPU / 4 GiB matches the conservative defaults
+# the cirruslabs guest images ship. memory-size is bytes.
+& $RunnyctlPath image pack $workVhdx --os windows --arch amd64 `
+    --cpu-count 2 --memory-size 4294967296 --oci-layout $layout
 if ($LASTEXITCODE -ne 0) { throw "runnyctl image pack failed ($LASTEXITCODE)" }
 
 $ubr = 'UNKNOWN'
