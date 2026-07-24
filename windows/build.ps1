@@ -96,6 +96,11 @@ function Wait-GuestSsh {
 
 # --- Stage 0: offline-inject provisioning files into the pristine VHDX ---
 Write-Host '== stage 0: inject unattend.xml + SetupComplete.cmd =='
+# Parse the answer file host-side before spending a boot on it -- Windows
+# Setup hard-fails the whole file on any XML error (including double
+# hyphens in comments), and the failure surfaces as a modal dialog on the
+# VM console, not in this script's output.
+[xml](Get-Content -Raw (Join-Path $PSScriptRoot 'unattend.xml')) | Out-Null
 Copy-Item $BaseVhdx $workVhdx -Force
 $mount = Mount-VHD -Path $workVhdx -Passthru
 try {

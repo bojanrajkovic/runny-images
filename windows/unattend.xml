@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Lite provisioning: get a pristine WS2025 eval VHDX headlessly past OOBE
      with the built-in Administrator account set to the well-known baked
-     password (Administrator/Administrator -- matches the cirruslabs Mac/
+     password (Administrator/Administrator, matching the cirruslabs Mac/
      Linux guest convention; runny rotates it post-boot, and the ephemeral
      guest's network isolation is the real security boundary, not password
-     secrecy). No AutoLogon here -- that's baked later by install-launcher.ps1
+     secrecy). No AutoLogon here; that's baked later by install-launcher.ps1
      once the toolchain/launcher are actually in place, not during this
      lite-provisioning pass.
 
@@ -12,7 +12,9 @@
      on real hardware that they do not fire without an interactive logon,
      which never happens in this headless flow. SetupComplete.cmd (SYSTEM,
      runs after OOBE with no logon required) is the proven hook for that
-     instead -- see SetupComplete.cmd in this directory. -->
+     instead; see SetupComplete.cmd in this directory. (NB: no double
+     hyphens in this comment, ever. They are illegal inside XML comments
+     and Windows Setup hard-fails the whole answer file on them.) -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
