@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lite provisioning: get a pristine WS2025 eval VHDX headlessly past OOBE
+     with the built-in Administrator account set to the well-known baked
+     password (Administrator/Administrator -- matches the cirruslabs Mac/
+     Linux guest convention; runny rotates it post-boot, and the ephemeral
+     guest's network isolation is the real security boundary, not password
+     secrecy). No AutoLogon here -- that's baked later by install-launcher.ps1
+     once the toolchain/launcher are actually in place, not during this
+     lite-provisioning pass.
+
+     FirstLogonCommands are deliberately NOT used to install OpenSSH: proven
+     on real hardware that they do not fire without an interactive logon,
+     which never happens in this headless flow. SetupComplete.cmd (SYSTEM,
+     runs after OOBE with no logon required) is the proven hook for that
+     instead -- see SetupComplete.cmd in this directory. -->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value>Administrator</Value>
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+      </UserAccounts>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <NetworkLocation>Work</NetworkLocation>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <TimeZone>UTC</TimeZone>
+    </component>
+  </settings>
+</unattend>

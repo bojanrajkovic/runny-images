@@ -1,0 +1,13 @@
+# Downloaded base media and build output -- large, regenerable, never committed.
+*.vhdx
+*.iso
+out/
+output-*/
+
+# Secrets dropped locally during a build (Harbor robot creds, etc.).
+*secret*
+*.pfx
+
+# OS cruft.
+.DS_Store
+Thumbs.db
