@@ -63,7 +63,12 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 # the shipped image authenticates with the well-known password only.
 $buildKey = Join-Path $OutDir 'build-key'
 if (-not (Test-Path $buildKey)) {
-    ssh-keygen.exe -t ed25519 -N '""' -C 'runny-images-build' -f $buildKey | Out-Null
+    # Empty passphrase via cmd.exe: Windows PowerShell 5.1 either drops an
+    # empty-string argument to a native command entirely or (quoted as '""')
+    # passes the two literal quote characters as the passphrase -- both
+    # silently produce a key that BatchMode auth can never use. cmd's ""
+    # is a real empty argument.
+    & cmd.exe /c "ssh-keygen -q -t ed25519 -N `"`" -C runny-images-build -f `"$buildKey`""
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
 }
 
