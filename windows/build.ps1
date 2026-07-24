@@ -247,4 +247,5 @@ Write-Host ''
 Write-Host "sealed VHDX: $workVhdx"
 Write-Host "OCI layout:  $layout"
 Write-Host "suggested tag: windows-server-2025-runner:$ubr-$sha"
-Write-Host "push with:   oras cp --from-oci-layout `"$layout@<manifest-digest>`" <registry>/<project>/windows-server-2025-runner:$ubr-$sha"
+Write-Host "push with (after oras login):"
+Write-Host "  $(Join-Path $PSScriptRoot 'push-image.ps1') -Registry <registry> -Repository <project>/windows-server-2025-runner -Tag $ubr-$sha"
