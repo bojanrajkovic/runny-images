@@ -105,6 +105,9 @@ try {
     if (-not $osVolume) { throw 'no Windows volume found in the base VHDX' }
     $root = "$($osVolume.DriveLetter):"
     New-Item -ItemType Directory -Force -Path "$root\Windows\Setup\Scripts" | Out-Null
+    # Panther doesn't exist on never-booted media -- setup creates it during
+    # OOBE; injecting before first boot means creating it ourselves.
+    New-Item -ItemType Directory -Force -Path "$root\Windows\Panther" | Out-Null
     Copy-Item (Join-Path $PSScriptRoot 'unattend.xml') "$root\Windows\Panther\unattend.xml" -Force
     Copy-Item (Join-Path $PSScriptRoot 'SetupComplete.cmd') "$root\Windows\Setup\Scripts\SetupComplete.cmd" -Force
     New-Item -ItemType Directory -Force -Path "$root\ProgramData\ssh" | Out-Null
