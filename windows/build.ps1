@@ -147,7 +147,7 @@ try {
     $maxPasses = 8
     for ($pass = 1; $pass -le $maxPasses; $pass++) {
         Write-Host "  update pass $pass..."
-        $out = ssh.exe -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL "$guestUser@$ip" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1'
+        $out = ssh.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes "$guestUser@$ip" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1'
         Write-Host ($out -join "`n")
         if ($out -match 'WINDOWS_UPDATE: CLEAN') { break }
         if ($pass -eq $maxPasses) { throw "windows update did not converge in $maxPasses passes" }
