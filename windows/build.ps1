@@ -182,10 +182,14 @@ try {
 
     # --- Stage 6: seal ---
     Write-Host '== stage 6: seal (graceful shutdown) =='
-    # Remove the build-time SSH key -- the shipped image authenticates with
-    # the well-known password only (runny rotates it post-boot).
-    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "Remove-Item -Force C:\ProgramData\ssh\administrators_authorized_keys,C:\activate.ps1,C:\windows-update.ps1,C:\install-toolchain.ps1,C:\install-launcher.ps1,C:\provisioned.txt,C:\wu-worker.ps1,C:\wu-result.txt,C:\wu-progress.txt,C:\wu-install-log.txt -ErrorAction SilentlyContinue"'
-    Invoke-Guest -Ip $ip -Command 'shutdown /s /t 5'
+    # Key removal and shutdown MUST be one SSH command: removing
+    # administrators_authorized_keys kills the build key's auth, so any
+    # subsequent keyed connection fails (learned the hard way -- a separate
+    # trailing shutdown command 255'd and the error path power-yanked the
+    # guest, dirtying the "sealed" filesystem). The shipped image
+    # authenticates with the well-known password only (runny rotates it
+    # post-boot).
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "Remove-Item -Force C:\ProgramData\ssh\administrators_authorized_keys,C:\activate.ps1,C:\windows-update.ps1,C:\install-toolchain.ps1,C:\install-launcher.ps1,C:\provisioned.txt,C:\wu-worker.ps1,C:\wu-result.txt,C:\wu-progress.txt,C:\wu-install-log.txt -ErrorAction SilentlyContinue; shutdown /s /t 5"'
     while ((Get-VM -Name $vmName).State -ne 'Off') { Start-Sleep -Seconds 5 }
 } finally {
     if ((Get-VM -Name $vmName -ErrorAction SilentlyContinue)) {
