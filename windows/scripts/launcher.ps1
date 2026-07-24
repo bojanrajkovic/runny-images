@@ -23,12 +23,20 @@
     The marker file written at startup (session ID + PID) is what the
     factory's smoke test reads to prove launcher processes land in session 1,
     without needing any GitHub involvement.
+
+    Observability contract for the orchestrator (which can only reach the
+    guest over SSH, outside this session): all runner output is redirected to
+    $LogPath, and the runner's exit code is written to $ExitPath when it
+    exits. Tailing the log and watching for the exit file is how an external
+    orchestrator follows the runner's lifecycle.
 #>
 [CmdletBinding()]
 param(
     [string]$ConfigPath = 'C:\actions-runner\.jitconfig',
     [string]$RunnerRoot = 'C:\actions-runner',
-    [string]$MarkerPath = 'C:\runny\launcher-marker.txt'
+    [string]$MarkerPath = 'C:\runny\launcher-marker.txt',
+    [string]$LogPath = 'C:\runny\runner.log',
+    [string]$ExitPath = 'C:\runny\runner-exit.txt'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,11 +51,22 @@ while (-not (Test-Path $ConfigPath)) {
 $jitConfig = (Get-Content -Raw $ConfigPath).Trim()
 Remove-Item -Force $ConfigPath
 
-$runCmd = Join-Path $RunnerRoot 'run.cmd'
-if (-not (Test-Path $runCmd)) {
-    "ERROR: $runCmd not found after config arrived" | Add-Content -Path $MarkerPath
+# The listener binary is invoked directly rather than through run.cmd:
+# run.cmd routes through cmd.exe, whose 8191-character command-line ceiling a
+# multi-kilobyte JIT blob can breach, and its run-helper wrapper only exists
+# to restart the listener across self-updates -- which JIT-config runners run
+# with disabled. Output goes to a log file and the exit code to a marker file
+# so the orchestrator can follow the runner's lifecycle over SSH from outside
+# this session.
+$listener = Join-Path $RunnerRoot 'bin\Runner.Listener.exe'
+if (-not (Test-Path $listener)) {
+    "ERROR: $listener not found after config arrived" | Add-Content -Path $MarkerPath
     exit 1
 }
 
 "launching runner at $(Get-Date -Format o)" | Add-Content -Path $MarkerPath
-& $runCmd --jitconfig $jitConfig
+& $listener run --jitconfig $jitConfig *> $LogPath
+$code = $LASTEXITCODE
+"$code" | Set-Content -Path $ExitPath
+"runner exited code=$code at $(Get-Date -Format o)" | Add-Content -Path $MarkerPath
+exit $code
