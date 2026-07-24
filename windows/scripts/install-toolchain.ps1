@@ -36,9 +36,14 @@ $packages = @(
     'dotnet-sdk'
 )
 
+# 3010 = success-reboot-required, 1641 = success-reboot-initiated -- both
+# are successful installs (the build's own between-stage reboot handles the
+# pending restart); only genuinely failing codes should abort the build.
+$okExit = @(0, 1641, 3010)
+
 foreach ($pkg in $packages) {
     choco install $pkg -y --no-progress
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -notin $okExit) {
         throw "choco install $pkg failed with exit code $LASTEXITCODE"
     }
 }
@@ -46,7 +51,7 @@ foreach ($pkg in $packages) {
 # VS Build Tools only -- MSVC + MSBuild, not the Enterprise IDE.
 choco install visualstudio2022buildtools -y --no-progress `
     --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --norestart"
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -notin $okExit) {
     throw "choco install visualstudio2022buildtools failed with exit code $LASTEXITCODE"
 }
 

@@ -165,6 +165,14 @@ try {
         Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\docker-escape-hatch.ps1'
     }
 
+    # Reboot before the launcher bake: choco installs commonly leave a
+    # pending restart (exit 3010), and sealing with one pending would make
+    # every clone's first boot finish the install instead of running jobs.
+    Write-Host '  rebooting to flush pending toolchain restarts...'
+    Invoke-Guest -Ip $ip -Command 'shutdown /r /t 5'
+    Start-Sleep -Seconds 30
+    $ip = Wait-GuestSsh -VmName $vmName
+
     # --- Stage 5: launcher + AutoLogon ---
     Write-Host '== stage 5: launcher + AutoLogon =='
     Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path C:\runny | Out-Null"'
