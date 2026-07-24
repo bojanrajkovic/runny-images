@@ -180,6 +180,11 @@ try {
     Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'install-launcher.ps1') -Remote 'C:\install-launcher.ps1'
     Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\install-launcher.ps1'
 
+    # --- Stage 5.5: pre-seal cleanup + retrim ---
+    Write-Host '== stage 5.5: cleanup + retrim =='
+    Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'cleanup.ps1') -Remote 'C:\cleanup.ps1'
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\cleanup.ps1'
+
     # --- Stage 6: seal ---
     Write-Host '== stage 6: seal (graceful shutdown) =='
     # Key removal and shutdown MUST be one SSH command: removing
@@ -189,7 +194,7 @@ try {
     # guest, dirtying the "sealed" filesystem). The shipped image
     # authenticates with the well-known password only (runny rotates it
     # post-boot).
-    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "Remove-Item -Force C:\ProgramData\ssh\administrators_authorized_keys,C:\activate.ps1,C:\windows-update.ps1,C:\install-toolchain.ps1,C:\install-launcher.ps1,C:\provisioned.txt,C:\wu-worker.ps1,C:\wu-result.txt,C:\wu-progress.txt,C:\wu-install-log.txt -ErrorAction SilentlyContinue; shutdown /s /t 5"'
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "Remove-Item -Force C:\ProgramData\ssh\administrators_authorized_keys,C:\activate.ps1,C:\windows-update.ps1,C:\install-toolchain.ps1,C:\install-launcher.ps1,C:\cleanup.ps1,C:\provisioned.txt,C:\wu-worker.ps1,C:\wu-result.txt,C:\wu-progress.txt,C:\wu-install-log.txt -ErrorAction SilentlyContinue; shutdown /s /t 5"'
     while ((Get-VM -Name $vmName).State -ne 'Off') { Start-Sleep -Seconds 5 }
 } finally {
     if ((Get-VM -Name $vmName -ErrorAction SilentlyContinue)) {
@@ -197,6 +202,15 @@ try {
         Remove-VM -Name $vmName -Force
     }
 }
+
+# --- Stage 6.5: compact the sealed VHDX ---
+# Effective because stage 5.5's in-guest ReTrim already released the freed
+# blocks; without that, Full-mode compaction reclaims almost nothing
+# (measured: ~1 GiB on an untrimmed 35.7 GiB image).
+Write-Host '== stage 6.5: compact =='
+Write-Host ('  {0:N1} GiB before' -f ((Get-Item $workVhdx).Length/1GB))
+Optimize-VHD -Path $workVhdx -Mode Full
+Write-Host ('  {0:N1} GiB after' -f ((Get-Item $workVhdx).Length/1GB))
 
 # --- Stage 7: smoke test the sealed image ---
 Write-Host '== stage 7: smoke test =='
