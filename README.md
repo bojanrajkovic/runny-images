@@ -13,9 +13,48 @@ Base media is the free Microsoft Windows Server 2025 evaluation VHDX ([aka.ms/Wi
 - **No sysprep.** Un-generalized differencing clones off the sealed parent coexist fine (duplicate machine SID/`COMPUTERNAME` are harmless for never-domain-joined ephemeral guests addressed by IP), and skipping generalize is what makes the ephemeral clone boot in seconds instead of minutes.
 - **Activate at build time, never per guest.** `slmgr /ato` runs once per build and the sealed parent's 180-day evaluation window is inherited by every clone; rebuild well inside that window (~150 days). `/rearm` is not a substitute — on a never-activated install it only resets the 10-day pre-activation grace period.
 - **Windows Update is an explicit build step.** The eval media ships stale and does not patch itself.
-- **Interactive-session launcher.** AutoLogon + a Task Scheduler task ("Run only when user is logged on") starts the runner in the interactive desktop session — session 0 services have no desktop, and `actions/runner` has no built-in AutoLogon mode ([actions/runner#563](https://github.com/actions/runner/issues/563)). The launcher polls `C:\actions-runner\.jitconfig` for the orchestrator's SSH-dropped JIT config, starts the runner with its output redirected to `C:\runny\runner.log`, and writes the exit code to `C:\runny\runner-exit.txt` — the log + exit files are the contract an external orchestrator tails over SSH to follow the runner's lifecycle.
+- **Interactive-session launcher.** AutoLogon + a Task Scheduler task ("Run only when user is logged on") starts the runner in the interactive desktop session — session 0 services have no desktop, and `actions/runner` has no built-in AutoLogon mode ([actions/runner#563](https://github.com/actions/runner/issues/563)). See [Guest contract](#guest-contract) for the protocol this exposes.
 - **Well-known guest credentials** (`Administrator`/`Administrator`), matching the cirruslabs guest-image convention; runny rotates them post-boot. The guest's isolation is the security boundary, not password secrecy.
 - **Tag scheme:** `windows-server-2025-runner:<UBR>-<short-sha>` — the OS build number never changes between rebuilds off the same media; the Update Build Revision is the real patch-currency signal.
+
+## Guest contract
+
+The image carries no runner binary, no registration state, and nothing that needs runny at runtime — anything that can SSH into the guest can drive it. This section is the interface; treat it as stable and the rest of the repo as implementation detail. The `C:\runny\` prefix is a label, not a dependency.
+
+**Credentials and access.** Log in as `Administrator` / `Administrator` (see the credentials note above for why those aren't secret). OpenSSH is enabled and listening on port 22 by first boot, and AutoLogon leaves the console session logged in from boot onward.
+
+**Why there's a launcher at all.** A process spawned over SSH lands in session 0, which has no desktop, so an orchestrator cannot start a UI-capable runner directly. The image bakes AutoLogon plus a Task Scheduler task (`runny-launcher`, registered "run only when user is logged on") that starts `launcher.ps1` inside the interactive session at every logon. The launcher is already running before you connect; you don't start it, you feed it.
+
+```
+   consumer (over SSH)                     guest session 1
+   ──────────────────                      ───────────────
+                                           launcher.ps1 running since boot
+                                           writes launcher-marker.txt
+                                           polls for .jitconfig every 2s
+   1. stage runner ────────────────────►   C:\actions-runner\
+   2. write .jitconfig.tmp             │
+   3. rename → .jitconfig ─────────────►   picked up, deleted, exec'd
+                                           bin\Runner.Listener.exe run --jitconfig
+   4. tail runner.log     ◄─────────────   stdout + stderr
+   5. watch runner-exit.txt ◄───────────   exit code, written on exit
+```
+
+| Path | Written by | Meaning |
+| --- | --- | --- |
+| `C:\actions-runner\` | consumer | Where the runner must be staged. The launcher execs `bin\Runner.Listener.exe` beneath it. |
+| `C:\actions-runner\.jitconfig` | consumer | Arrival starts the runner. Must be written atomically — see below. |
+| `C:\runny\launcher-marker.txt` | image | Launcher PID and session ID at startup, then lifecycle lines. |
+| `C:\runny\runner.log` | image | Runner stdout and stderr, truncated at each launch. |
+| `C:\runny\runner-exit.txt` | image | Runner exit code, written once the runner exits. |
+
+Four things about that protocol are load-bearing:
+
+- **Write `.jitconfig` atomically** — stage it under a different name and rename it into place. The launcher polls with `Test-Path`, which goes true the moment the file is created, so a direct upload can be read half-written and hand the runner a truncated config.
+- **The config is consumed and deleted before the runner starts.** It's a one-shot registration credential and shouldn't outlive its use on disk. Don't expect to read it back.
+- **One runner per boot.** The launcher exits when the runner does, so a fresh cycle means a fresh boot. The task is set to restart the launcher up to 3 times if it exits nonzero, so a failing runner will be followed by another poll rather than a dead guest.
+- **The exit file is the completion signal**, not the log. Tail `runner.log` for progress; wait on `runner-exit.txt` to know the runner is done and why.
+
+**Consumers that aren't GitHub Actions.** The valuable, transferable piece here is the mechanism — AutoLogon plus an at-logon task with `LogonType Interactive` — not the JIT-config protocol layered on it. `launcher.ps1` takes `-ConfigPath`, `-RunnerRoot`, `-MarkerPath`, `-LogPath` and `-ExitPath`; the baked task simply doesn't pass them. Re-register the task over SSH with your own arguments, or point it at your own script entirely, and the session-1 launch behaviour still works. Two details are worth stealing rather than rediscovering: invoke the listener binary directly instead of through `run.cmd`, whose `cmd.exe` command line tops out at 8191 characters that a multi-kilobyte JIT blob breaches, and register the task as "run only when user is logged on" — the "whether logged on or not" variant runs in session 0 and defeats the whole exercise.
 
 ## Pipeline (manual for now)
 
