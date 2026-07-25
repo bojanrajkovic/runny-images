@@ -44,6 +44,10 @@ $ErrorActionPreference = 'Stop'
 $sessionId = (Get-Process -Id $PID).SessionId
 "pid=$PID sessionId=$sessionId started=$(Get-Date -Format o)" | Set-Content -Path $MarkerPath
 
+# Test-Path goes true the instant the file is created, not when it's finished
+# being written -- so the documented contract requires consumers to stage the
+# blob elsewhere and rename it into place. Keep that requirement in the README
+# in step with any change here: a plain upload races into a truncated config.
 while (-not (Test-Path $ConfigPath)) {
     Start-Sleep -Seconds 2
 }
