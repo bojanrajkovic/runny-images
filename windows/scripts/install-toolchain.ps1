@@ -27,6 +27,7 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 $packages = @(
     'git',
     'gh',
+    'powershell-core',
     'azure-cli',
     'awscli',
     'gcloudsdk',
@@ -46,6 +47,18 @@ foreach ($pkg in $packages) {
     if ($LASTEXITCODE -notin $okExit) {
         throw "choco install $pkg failed with exit code $LASTEXITCODE"
     }
+}
+
+# This session's PATH was captured before the installs ran, so re-read it from
+# the registry -- that is what a runner job session inherits. pwsh is the one
+# worth asserting on: it is the shell workflows request by name (`shell: pwsh`),
+# and a silently PATH-less PowerShell 7 is exactly how it shipped missing before.
+$env:Path = @(
+    [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+    [Environment]::GetEnvironmentVariable('Path', 'User')
+) -join ';'
+if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
+    throw 'pwsh is not on the PATH after install -- job sessions would not find PowerShell 7'
 }
 
 # VS Build Tools only -- MSVC + MSBuild, not the Enterprise IDE.
