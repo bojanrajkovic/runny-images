@@ -92,9 +92,20 @@ try {
         throw 'SMOKE FAIL: launcher ran in session 0 -- no interactive desktop; scheduled task is misconfigured'
     }
     Write-Host "smoke: launcher landed in interactive session $($Matches[1])"
+
+    # Defender removal is checked from the engine binary rather than from
+    # Get-WindowsFeature, because this runs offline against the sealed VHDX
+    # with no credentials. A preference toggle would leave this file in place;
+    # only the feature removal takes it away, which is exactly the distinction
+    # worth asserting (see scripts/remove-defender.ps1).
+    $engine = "$($osVolume.DriveLetter):\Program Files\Windows Defender\MsMpEng.exe"
+    if (Test-Path $engine) {
+        throw 'SMOKE FAIL: Defender engine still present -- the feature removal did not take'
+    }
+    Write-Host 'smoke: Defender removed'
 } finally {
     Dismount-VHD -Path $childVhdx
     Remove-Item -Force $childVhdx
 }
 
-Write-Host 'SMOKE PASS: SSH up + launcher in interactive session'
+Write-Host 'SMOKE PASS: SSH up + launcher in interactive session + Defender removed'
