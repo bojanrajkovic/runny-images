@@ -78,6 +78,32 @@ if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
     throw 'pwsh is not on the PATH after install -- job sessions would not find PowerShell 7'
 }
 
+# vcpkg -- the standard C/C++ package manager, natural companion to the
+# CMake/Ninja/vswhere/VCTools cluster above. Not a choco package; built from
+# source, adapted from actions/runner-images' Install-Vcpkg.ps1. Placed after
+# the PATH re-read above so `git` (installed via the loop) actually resolves.
+$vcpkgRoot = 'C:\vcpkg'
+git clone 'https://github.com/Microsoft/vcpkg.git' $vcpkgRoot -q
+if ($LASTEXITCODE -ne 0) {
+    throw "git clone of vcpkg failed with exit code $LASTEXITCODE"
+}
+
+& "$vcpkgRoot\bootstrap-vcpkg.bat"
+if ($LASTEXITCODE -ne 0) {
+    throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"
+}
+
+& "$vcpkgRoot\vcpkg.exe" integrate install
+if ($LASTEXITCODE -ne 0) {
+    throw "vcpkg integrate install failed with exit code $LASTEXITCODE"
+}
+
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+if ($machinePath -notlike "*$vcpkgRoot*") {
+    [Environment]::SetEnvironmentVariable('Path', "$machinePath;$vcpkgRoot", 'Machine')
+}
+[Environment]::SetEnvironmentVariable('VCPKG_INSTALLATION_ROOT', $vcpkgRoot, 'Machine')
+
 # VS Build Tools only -- MSVC + MSBuild, not the Enterprise IDE. Add-ons
 # beyond the base VCTools workload, confirmed against actions/runner-images'
 # toolset-2025.json and Windows2025-Readme.md:
