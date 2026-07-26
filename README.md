@@ -73,8 +73,6 @@ build.ps1
   → oras cp ./out <registry>/<project>/windows-server-2025-runner:<tag>
 ```
 
-`build.ps1` is a first draft — it assembles per-step pieces that are each independently simple, but the end-to-end orchestration has not been run against real hardware yet. Validate it on the build host before trusting a real build off it.
-
 ## Requirements
 
 - A Windows host with the `Hyper-V` PowerShell module — VM creation uses standard `New-VM`/`Set-VMFirmware`/`Start-VM`, not runny's internal HCS API.
