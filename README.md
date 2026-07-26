@@ -73,8 +73,6 @@ build.ps1
   → oras cp ./out <registry>/<project>/windows-server-2025-runner:<tag>
 ```
 
-`build.ps1` is a first draft — it assembles per-step pieces that are each independently simple, but the end-to-end orchestration has not been run against real hardware yet. Validate it on the build host before trusting a real build off it.
-
 ## Requirements
 
 - A Windows host with the `Hyper-V` PowerShell module — VM creation uses standard `New-VM`/`Set-VMFirmware`/`Start-VM`, not runny's internal HCS API.
@@ -85,3 +83,20 @@ build.ps1
 ## Toolchain scope
 
 Curated, not full `windows-latest` parity — lean by default (the same philosophy as cirruslabs' tiered guest images), growing only on demonstrated need. v1 keeps Git, PowerShell 7, the `gh`/`az`/`aws`/`gcloud` CLIs, Go, Node LTS, Python, the .NET SDK, and VS Build Tools; see `install-toolchain.ps1`. `docker-escape-hatch.ps1` is disabled by default; see its header comment for how to opt a build into nested-virt + WSL2 + Linux-container support if you need it (nothing in runny's own use case does, but this is general-purpose tooling).
+
+The long tail deliberately stays out — mobile (Android/iOS/MAUI/Xamarin), game engines, cloud-IDE tooling, and legacy web/BI tooling are each real but narrow verticals, and anyone who needs one of them already knows exactly which component they need. Two ways to add it, in order of permanence:
+
+- **Bake it into every future build.** Edit the `--add` list in `install-toolchain.ps1` (VS components) or the `$packages` array (choco packages) directly in your fork, then rebuild.
+- **Add it to an already-built install without touching the curated file.** VS Build Tools supports unattended `modify` against an existing installation:
+
+  ```powershell
+  Invoke-WebRequest https://aka.ms/vs/17/release/vs_buildtools.exe -OutFile vs_buildtools.exe
+  .\vs_buildtools.exe modify `
+      --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" `
+      --add <componentId> `
+      --quiet --norestart --wait
+  ```
+
+  Run it as an extra step appended to your own copy of `build.ps1` (after `install-toolchain.ps1`, before seal), or by hand against a running guest before sealing.
+
+Either way, the component ID catalog lives in actions/runner-images' [`Windows2025-Readme.md`](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md) and [`toolset-2025.json`](https://github.com/actions/runner-images/blob/main/images/windows/toolsets/toolset-2025.json) — that's where every `Microsoft.VisualStudio.Component.*` ID currently in this repo's own list came from.
