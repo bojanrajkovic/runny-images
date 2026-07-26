@@ -10,6 +10,11 @@
 
     Docker/nested-virt is intentionally NOT here -- see
     docker-escape-hatch.ps1 for that, disabled by default.
+
+    Need a package or VS component this doesn't install? Edit the lists
+    below directly, or see the README's "Toolchain scope" section for
+    adding one to an already-built install via `vs_buildtools.exe modify
+    --add` without touching this file.
 #>
 [CmdletBinding()]
 param()
