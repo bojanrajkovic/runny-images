@@ -165,6 +165,27 @@ try {
     Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'activate.ps1') -Remote 'C:\activate.ps1'
     Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\activate.ps1'
 
+    # --- Stage 2.5: remove Defender, before Windows Update can service it ---
+    # Ordering is deliberate and was moved here from after the toolchain. Left
+    # until later, the update loop installs Defender's own updates for a
+    # component this build then deletes: one real build installed KB5007651
+    # (Windows Security platform) and KB2267602 (definitions) in an early pass,
+    # and was offered KB5007651 again several passes later. That is scan,
+    # download and install time spent on payload that never ships.
+    #
+    # No extra reboot is needed: the feature removal completes on the update
+    # loop's own reboot between passes, or failing that on the pre-launcher
+    # reboot later. The toolchain install is no longer scanned either, which was
+    # the other reason to move it up.
+    #
+    # The risk accepted here is that -Remove strips the component payload before
+    # the big cumulative lands, and Windows servicing is fussy about absent
+    # payload. If a cumulative ever fails to install in stage 3, this ordering
+    # is the first thing to suspect.
+    Write-Host '== stage 2.5: remove Defender =='
+    Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'remove-defender.ps1') -Remote 'C:\remove-defender.ps1'
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\remove-defender.ps1'
+
     # --- Stage 3: Windows Update loop (install -> reboot -> repeat until clean) ---
     Write-Host '== stage 3: windows update loop =='
     Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'windows-update.ps1') -Remote 'C:\windows-update.ps1'
@@ -189,18 +210,9 @@ try {
         Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\docker-escape-hatch.ps1'
     }
 
-    # Defender comes out here rather than earlier so it rides the reboot below
-    # instead of needing one of its own, and so Windows Update (stage 3) cannot
-    # reinstall the feature after it has been removed. Moving it ahead of the
-    # toolchain would also stop the toolchain install being scanned, at the cost
-    # of one extra reboot -- worth revisiting only if build time starts to hurt.
-    Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'remove-defender.ps1') -Remote 'C:\remove-defender.ps1'
-    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\remove-defender.ps1'
-
     # Reboot before the launcher bake: choco installs commonly leave a
     # pending restart (exit 3010), and sealing with one pending would make
     # every clone's first boot finish the install instead of running jobs.
-    # It also completes the Defender feature removal above.
     Write-Host '  rebooting to flush pending toolchain restarts...'
     Invoke-Guest -Ip $ip -Command 'shutdown /r /t 5'
     Start-Sleep -Seconds 30
