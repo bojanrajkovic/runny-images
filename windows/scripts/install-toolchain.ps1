@@ -86,8 +86,13 @@ if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
 #   - VC.Redist.14.Latest: the standalone VC++ redistributable DLLs that a huge
 #     fraction of unrelated prebuilt Windows binaries assume are already
 #     present, not just what we compile ourselves.
+#   - VC.ATL / VC.ATLMFC (+ Spectre variants): still-live legacy Windows
+#     desktop/COM development (MFC apps, ATL/COM components). Cheap enough
+#     (tens of MB) that the exclusion cost -- a cryptic afxwin.h/atlbase.h
+#     not-found error with no obvious cause -- isn't worth it. ARM64 variants
+#     skipped: cross-compiling from x64 is rare enough to stay demonstrated-need.
 choco install visualstudio2022buildtools -y --no-progress `
-    --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --add Microsoft.VisualStudio.Component.VC.Redist.14.Latest --includeRecommended --passive --norestart"
+    --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --add Microsoft.VisualStudio.Component.VC.Redist.14.Latest --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.VC.ATL.Spectre --add Microsoft.VisualStudio.Component.VC.ATLMFC --add Microsoft.VisualStudio.Component.VC.ATLMFC.Spectre --includeRecommended --passive --norestart"
 if ($LASTEXITCODE -notin $okExit) {
     throw "choco install visualstudio2022buildtools failed with exit code $LASTEXITCODE"
 }
