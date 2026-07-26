@@ -165,9 +165,18 @@ try {
         Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\docker-escape-hatch.ps1'
     }
 
+    # Defender comes out here rather than earlier so it rides the reboot below
+    # instead of needing one of its own, and so Windows Update (stage 3) cannot
+    # reinstall the feature after it has been removed. Moving it ahead of the
+    # toolchain would also stop the toolchain install being scanned, at the cost
+    # of one extra reboot -- worth revisiting only if build time starts to hurt.
+    Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'remove-defender.ps1') -Remote 'C:\remove-defender.ps1'
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\remove-defender.ps1'
+
     # Reboot before the launcher bake: choco installs commonly leave a
     # pending restart (exit 3010), and sealing with one pending would make
     # every clone's first boot finish the install instead of running jobs.
+    # It also completes the Defender feature removal above.
     Write-Host '  rebooting to flush pending toolchain restarts...'
     Invoke-Guest -Ip $ip -Command 'shutdown /r /t 5'
     Start-Sleep -Seconds 30
@@ -194,7 +203,7 @@ try {
     # guest, dirtying the "sealed" filesystem). The shipped image
     # authenticates with the well-known password only (runny rotates it
     # post-boot).
-    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "Remove-Item -Force C:\ProgramData\ssh\administrators_authorized_keys,C:\activate.ps1,C:\windows-update.ps1,C:\install-toolchain.ps1,C:\install-launcher.ps1,C:\cleanup.ps1,C:\provisioned.txt,C:\wu-worker.ps1,C:\wu-result.txt,C:\wu-progress.txt,C:\wu-install-log.txt -ErrorAction SilentlyContinue; shutdown /s /t 5"'
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -Command "Remove-Item -Force C:\ProgramData\ssh\administrators_authorized_keys,C:\activate.ps1,C:\windows-update.ps1,C:\install-toolchain.ps1,C:\remove-defender.ps1,C:\install-launcher.ps1,C:\cleanup.ps1,C:\provisioned.txt,C:\wu-worker.ps1,C:\wu-result.txt,C:\wu-progress.txt,C:\wu-install-log.txt -ErrorAction SilentlyContinue; shutdown /s /t 5"'
     while ((Get-VM -Name $vmName).State -ne 'Off') { Start-Sleep -Seconds 5 }
 } finally {
     if ((Get-VM -Name $vmName -ErrorAction SilentlyContinue)) {

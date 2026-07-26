@@ -23,6 +23,8 @@ The image carries no runner binary, no registration state, and nothing that need
 
 **Credentials and access.** Log in as `Administrator` / `Administrator` (see the credentials note above for why those aren't secret). OpenSSH is enabled and listening on port 22 by first boot, and AutoLogon leaves the console session logged in from boot onward.
 
+**No Microsoft Defender.** The image ships with the Defender feature uninstalled, not merely disabled — a preference toggle can be reverted by Tamper Protection, so the payload is removed outright and the smoke test asserts the engine binary is gone. The reasoning is that this guest runs one job and is destroyed, so a scanner's value (persistence, dwell time) does not apply, while its cost (real-time scanning of thousands of short-lived build artifacts) very much does. What bounds a hostile job here is the hypervisor boundary and whatever network posture the orchestrator provides — not a signature scanner inside the disposable guest. If your threat model differs, `scripts/remove-defender.ps1` is one build stage and dropping it is a one-line change.
+
 **Why there's a launcher at all.** A process spawned over SSH lands in session 0, which has no desktop, so an orchestrator cannot start a UI-capable runner directly. The image bakes AutoLogon plus a Task Scheduler task (`runny-launcher`, registered "run only when user is logged on") that starts `launcher.ps1` inside the interactive session at every logon. The launcher is already running before you connect; you don't start it, you feed it.
 
 ```
