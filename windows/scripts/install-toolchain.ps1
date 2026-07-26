@@ -23,7 +23,13 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     $env:Path = "$env:Path;C:\ProgramData\chocolatey\bin"
 }
 
-# v1 curated keep list.
+# v1 curated keep list, plus a few general CI utilities and native-build
+# companions banked from a razor pass over actions/runner-images ("is this
+# likely necessary for a random build?"): 7zip/jq are near-universal CI
+# utilities, vswhere/ninja are the standard companions to the VC toolchain
+# below (node-gyp, CMake, and most native-build tooling shell out to vswhere
+# to find MSVC). cmake.install is added separately -- its installer doesn't
+# add itself to PATH without an explicit install arg.
 $packages = @(
     'git',
     'gh',
@@ -34,7 +40,11 @@ $packages = @(
     'golang',
     'nodejs-lts',
     'python',
-    'dotnet-sdk'
+    'dotnet-sdk',
+    '7zip.install',
+    'jq',
+    'vswhere',
+    'ninja'
 )
 
 # 3010 = success-reboot-required, 1641 = success-reboot-initiated -- both
@@ -47,6 +57,13 @@ foreach ($pkg in $packages) {
     if ($LASTEXITCODE -notin $okExit) {
         throw "choco install $pkg failed with exit code $LASTEXITCODE"
     }
+}
+
+# cmake.install's NSIS installer leaves CMake off PATH entirely in unattended
+# mode unless told otherwise -- unlike the packages above, this isn't optional.
+choco install cmake.install -y --no-progress --installargs 'ADD_CMAKE_TO_PATH=System'
+if ($LASTEXITCODE -notin $okExit) {
+    throw "choco install cmake.install failed with exit code $LASTEXITCODE"
 }
 
 # This session's PATH was captured before the installs ran, so re-read it from
