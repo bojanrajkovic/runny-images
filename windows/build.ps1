@@ -130,6 +130,14 @@ try {
 Write-Host '== stage 1: first boot (headless OOBE; SSH comes up when done) =='
 New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 4GB -VHDPath $workVhdx -SwitchName $SwitchName | Out-Null
 try {
+    # Automatic checkpoints are ON by default on Windows client and Server
+    # hosts, and they are silently fatal here: Start-VM takes a checkpoint,
+    # every subsequent write lands in a <name>_<guid>.avhdx differencing disk,
+    # and $workVhdx -- the file this script seals, smoke-tests and packages --
+    # keeps only the pristine base. A build that ran to completion would
+    # publish an image containing none of the updates, toolchain or launcher
+    # it just spent an hour installing, and nothing downstream would notice.
+    Set-VM -Name $vmName -AutomaticCheckpointsEnabled $false
     Set-VMProcessor -VMName $vmName -Count 4
     Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate 'MicrosoftWindows'
     Start-VM -Name $vmName

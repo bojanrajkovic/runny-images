@@ -36,6 +36,9 @@ New-VHD -Path $childVhdx -ParentPath $Vhdx -Differencing | Out-Null
 
 New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 4GB -VHDPath $childVhdx -SwitchName $SwitchName | Out-Null
 try {
+    # Same reason as build.ps1: a checkpoint here would divert the smoke
+    # child's writes and leave the marker check reading a stale disk.
+    Set-VM -Name $vmName -AutomaticCheckpointsEnabled $false
     Set-VMProcessor -VMName $vmName -Count 2
     Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate 'MicrosoftWindows'
     Start-VM -Name $vmName
