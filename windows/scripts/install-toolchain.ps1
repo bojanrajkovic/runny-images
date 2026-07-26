@@ -61,9 +61,13 @@ if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
     throw 'pwsh is not on the PATH after install -- job sessions would not find PowerShell 7'
 }
 
-# VS Build Tools only -- MSVC + MSBuild, not the Enterprise IDE.
+# VS Build Tools only -- MSVC + MSBuild, not the Enterprise IDE. The Spectre
+# libs are a separate component even under VCTools -- native Node addons
+# (node-pty, etc.) built via node-gyp/MSBuild fail with MSB8040 without them.
+# Confirmed against actions/runner-images' toolset-2025.json, which lists
+# Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre alongside VCTools.
 choco install visualstudio2022buildtools -y --no-progress `
-    --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --norestart"
+    --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --includeRecommended --passive --norestart"
 if ($LASTEXITCODE -notin $okExit) {
     throw "choco install visualstudio2022buildtools failed with exit code $LASTEXITCODE"
 }
