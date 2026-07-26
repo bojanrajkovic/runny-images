@@ -72,15 +72,31 @@ if (-not (Test-Path $buildKey)) {
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
 }
 
+# ServerAliveInterval/ServerAliveCountMax bound the wait on a connection that
+# dies without ever closing. Observed on a real build: an update pass finished
+# inside the guest, wrote its result and exited, but the close never reached the
+# host -- ssh.exe then blocked for two hours on a session that was already over,
+# which from the outside is indistinguishable from a slow install. Three minutes
+# of silence now surfaces as a failed pass, and the update loop already handles
+# that by rebooting and retrying. Applies to scp too, which passes -o to ssh.
+$sshOpts = @(
+    '-i', $buildKey
+    '-o', 'StrictHostKeyChecking=no'
+    '-o', 'UserKnownHostsFile=NUL'
+    '-o', 'BatchMode=yes'
+    '-o', 'ServerAliveInterval=30'
+    '-o', 'ServerAliveCountMax=6'
+)
+
 function Invoke-Guest {
     param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Command)
-    ssh.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes "$guestUser@$Ip" $Command
+    ssh.exe @sshOpts "$guestUser@$Ip" $Command
     if ($LASTEXITCODE -ne 0) { throw "guest command failed ($LASTEXITCODE): $Command" }
 }
 
 function Copy-ToGuest {
     param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Local, [Parameter(Mandatory)][string]$Remote)
-    scp.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes $Local "${guestUser}@${Ip}:$Remote"
+    scp.exe @sshOpts $Local "${guestUser}@${Ip}:$Remote"
     if ($LASTEXITCODE -ne 0) { throw "scp to guest failed: $Local -> $Remote" }
 }
 
@@ -155,7 +171,7 @@ try {
     $maxPasses = 8
     for ($pass = 1; $pass -le $maxPasses; $pass++) {
         Write-Host "  update pass $pass..."
-        $out = ssh.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes "$guestUser@$ip" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1'
+        $out = ssh.exe @sshOpts "$guestUser@$ip" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1'
         Write-Host ($out -join "`n")
         if ($out -match 'WINDOWS_UPDATE: CLEAN') { break }
         if ($pass -eq $maxPasses) { throw "windows update did not converge in $maxPasses passes" }
