@@ -88,16 +88,68 @@ $sshOpts = @(
     '-o', 'ServerAliveCountMax=6'
 )
 
+# Every guest call runs under a wall-clock deadline.
+#
+# ServerAliveInterval above only covers a peer that stops answering. It does
+# nothing for a session that stays up and simply never delivers, which is what
+# this build actually hits: repeatedly, a command finished inside the guest --
+# no process left, its work visibly done -- while the host sat on the call for
+# hours, on a guest that answered fresh connections in under a second and whose
+# sshd was still replying to keepalives.
+#
+# That mechanism is not understood. Four explanations were tested and disproved
+# (wedged WMI, an orphaned conhost holding the pipe, a generic per-command
+# fault -- 0 hangs in 40 trials -- and stale TCP state). The bound exists BECAUSE
+# it is not understood: an unexplained infinite wait becomes a loud, bounded
+# failure the caller can act on, which is the same reason the daemon puts a
+# deadline on every guest-facing call rather than enumerating what can go wrong
+# behind it.
+function Invoke-Bounded {
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][int]$TimeoutSec
+    )
+    $o = New-TemporaryFile
+    $e = New-TemporaryFile
+    try {
+        $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -PassThru `
+             -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName
+        # Touching Handle while the process is alive is what makes ExitCode
+        # readable after it exits. Without it, Start-Process -PassThru yields
+        # $null for every exit code -- verified on this host, including for a
+        # deliberate exit 7 -- so success would look like failure and a real
+        # failure would go unnoticed. WaitForExit() and Refresh() do not help.
+        $null = $p.Handle
+        $exited = $p.WaitForExit($TimeoutSec * 1000)
+        if (-not $exited) { try { $p.Kill() } catch { }; [void]$p.WaitForExit(10000) }
+        $text = @()
+        $text += @(Get-Content $o.FullName -ErrorAction SilentlyContinue)
+        $text += @(Get-Content $e.FullName -ErrorAction SilentlyContinue)
+        [pscustomobject]@{
+            TimedOut = -not $exited
+            ExitCode = if ($exited) { $p.ExitCode } else { $null }
+            Output   = $text
+        }
+    } finally {
+        Remove-Item $o.FullName, $e.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-Guest {
-    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Command)
-    ssh.exe @sshOpts "$guestUser@$Ip" $Command
-    if ($LASTEXITCODE -ne 0) { throw "guest command failed ($LASTEXITCODE): $Command" }
+    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Command, [int]$TimeoutSec = 1800)
+    $r = Invoke-Bounded -Exe 'ssh.exe' -Arguments ($sshOpts + @("$guestUser@$Ip", $Command)) -TimeoutSec $TimeoutSec
+    if ($r.Output) { Write-Host ($r.Output -join "`n") }
+    if ($r.TimedOut) { throw "guest command exceeded ${TimeoutSec}s and was killed: $Command" }
+    if ($r.ExitCode -ne 0) { throw "guest command failed ($($r.ExitCode)): $Command" }
 }
 
 function Copy-ToGuest {
-    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Local, [Parameter(Mandatory)][string]$Remote)
-    scp.exe @sshOpts $Local "${guestUser}@${Ip}:$Remote"
-    if ($LASTEXITCODE -ne 0) { throw "scp to guest failed: $Local -> $Remote" }
+    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Local, [Parameter(Mandatory)][string]$Remote, [int]$TimeoutSec = 300)
+    $r = Invoke-Bounded -Exe 'scp.exe' -Arguments ($sshOpts + @($Local, "${guestUser}@${Ip}:$Remote")) -TimeoutSec $TimeoutSec
+    if ($r.Output) { Write-Host ($r.Output -join "`n") }
+    if ($r.TimedOut) { throw "scp to guest exceeded ${TimeoutSec}s and was killed: $Local -> $Remote" }
+    if ($r.ExitCode -ne 0) { throw "scp to guest failed: $Local -> $Remote" }
 }
 
 function Wait-GuestSsh {
@@ -192,8 +244,16 @@ try {
     $maxPasses = 8
     for ($pass = 1; $pass -le $maxPasses; $pass++) {
         Write-Host "  update pass $pass..."
-        $out = ssh.exe @sshOpts "$guestUser@$ip" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1'
+        # A pass that overruns is not fatal: the loop's existing reboot-and-retry
+        # is the right response, and partial output is still inspected, because a
+        # pass that reported CLEAN and then failed to close should still count.
+        $passTimeoutSec = 3600
+        $r = Invoke-Bounded -Exe 'ssh.exe' `
+             -Arguments ($sshOpts + @("$guestUser@$ip", 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1')) `
+             -TimeoutSec $passTimeoutSec
+        $out = $r.Output
         Write-Host ($out -join "`n")
+        if ($r.TimedOut) { Write-Host "  pass exceeded ${passTimeoutSec}s and was killed; rebooting and retrying" }
         if ($out -match 'WINDOWS_UPDATE: CLEAN') { break }
         if ($pass -eq $maxPasses) { throw "windows update did not converge in $maxPasses passes" }
         Invoke-Guest -Ip $ip -Command 'shutdown /r /t 5'
