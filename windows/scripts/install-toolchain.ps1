@@ -88,14 +88,30 @@ if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
 # source, adapted from actions/runner-images' Install-Vcpkg.ps1. Placed after
 # the PATH re-read above so `git` (installed via the loop) actually resolves.
 $vcpkgRoot = 'C:\vcpkg'
-git clone 'https://github.com/Microsoft/vcpkg.git' $vcpkgRoot -q
-if ($LASTEXITCODE -ne 0) {
-    throw "git clone of vcpkg failed with exit code $LASTEXITCODE"
+
+# This stage has to survive being re-run against an image that already carries
+# the toolchain: resuming from a partially-built base is the normal path when an
+# earlier attempt failed late, and every choco install above is happy to repeat.
+# A bare `git clone` into an existing directory is not -- it aborts the whole
+# build on "destination path already exists", which is how stage 4 died on a
+# rebuild that had nothing else left to do.
+if (Test-Path (Join-Path $vcpkgRoot '.git')) {
+    Write-Output "vcpkg already present at $vcpkgRoot -- skipping clone"
+} else {
+    git clone 'https://github.com/Microsoft/vcpkg.git' $vcpkgRoot -q
+    if ($LASTEXITCODE -ne 0) {
+        throw "git clone of vcpkg failed with exit code $LASTEXITCODE"
+    }
 }
 
-& "$vcpkgRoot\bootstrap-vcpkg.bat"
-if ($LASTEXITCODE -ne 0) {
-    throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"
+# Bootstrap compiles vcpkg.exe from source, which is minutes; skip it when the
+# binary is already there. `integrate install` below is cheap and idempotent, so
+# it runs unconditionally.
+if (-not (Test-Path (Join-Path $vcpkgRoot 'vcpkg.exe'))) {
+    & "$vcpkgRoot\bootstrap-vcpkg.bat"
+    if ($LASTEXITCODE -ne 0) {
+        throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"
+    }
 }
 
 & "$vcpkgRoot\vcpkg.exe" integrate install

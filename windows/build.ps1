@@ -72,16 +72,113 @@ if (-not (Test-Path $buildKey)) {
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
 }
 
+# ServerAliveInterval/ServerAliveCountMax bound the wait on a connection that
+# dies without ever closing. Observed on a real build: an update pass finished
+# inside the guest, wrote its result and exited, but the close never reached the
+# host -- ssh.exe then blocked for two hours on a session that was already over,
+# which from the outside is indistinguishable from a slow install. Three minutes
+# of silence now surfaces as a failed pass, and the update loop already handles
+# that by rebooting and retrying. Applies to scp too, which passes -o to ssh.
+$sshOpts = @(
+    '-i', $buildKey
+    '-o', 'StrictHostKeyChecking=no'
+    '-o', 'UserKnownHostsFile=NUL'
+    '-o', 'BatchMode=yes'
+    '-o', 'ServerAliveInterval=30'
+    '-o', 'ServerAliveCountMax=6'
+)
+
+# Every guest call runs under a wall-clock deadline.
+#
+# ServerAliveInterval above only covers a peer that stops answering. It does
+# nothing for a session that stays up and simply never delivers, which is what
+# this build actually hits: repeatedly, a command finished inside the guest --
+# no process left, its work visibly done -- while the host sat on the call for
+# hours, on a guest that answered fresh connections in under a second and whose
+# sshd was still replying to keepalives.
+#
+# That mechanism is not understood. Four explanations were tested and disproved
+# (wedged WMI, an orphaned conhost holding the pipe, a generic per-command
+# fault -- 0 hangs in 40 trials -- and stale TCP state). The bound exists BECAUSE
+# it is not understood: an unexplained infinite wait becomes a loud, bounded
+# failure the caller can act on, which is the same reason the daemon puts a
+# deadline on every guest-facing call rather than enumerating what can go wrong
+# behind it.
+# Start-Process -ArgumentList joins an array with naive quoting: an element that
+# contains double quotes loses them. That matters because guest commands embed
+# them -- `powershell -Command "New-Item ... | Out-Null"` arrived at the guest
+# unquoted, so cmd read the pipe as its own and tried to run Out-Null as a
+# program. Native invocation (ssh.exe @args) got this right, so the quoting has
+# to be reproduced explicitly now that the call goes through Start-Process.
+# This is the CommandLineToArgvW rule: double the backslash run before a quote,
+# escape the quote, and double a trailing backslash run.
+function ConvertTo-NativeArg([string]$Argument) {
+    if ($Argument -ne '' -and $Argument -notmatch '[\s"]') { return $Argument }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $backslashes = 0
+    foreach ($ch in $Argument.ToCharArray()) {
+        if ($ch -eq [char]'\') { $backslashes++; continue }
+        if ($ch -eq [char]'"') {
+            [void]$sb.Append('\' * ($backslashes * 2 + 1)).Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$sb.Append('\' * $backslashes); $backslashes = 0 }
+        [void]$sb.Append($ch)
+    }
+    if ($backslashes -gt 0) { [void]$sb.Append('\' * ($backslashes * 2)) }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Invoke-Bounded {
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][int]$TimeoutSec
+    )
+    $commandLine = (($Arguments | ForEach-Object { ConvertTo-NativeArg $_ }) -join ' ')
+    $o = New-TemporaryFile
+    $e = New-TemporaryFile
+    try {
+        $p = Start-Process -FilePath $Exe -ArgumentList $commandLine -NoNewWindow -PassThru `
+             -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName
+        # Touching Handle while the process is alive is what makes ExitCode
+        # readable after it exits. Without it, Start-Process -PassThru yields
+        # $null for every exit code -- verified on this host, including for a
+        # deliberate exit 7 -- so success would look like failure and a real
+        # failure would go unnoticed. WaitForExit() and Refresh() do not help.
+        $null = $p.Handle
+        $exited = $p.WaitForExit($TimeoutSec * 1000)
+        if (-not $exited) { try { $p.Kill() } catch { }; [void]$p.WaitForExit(10000) }
+        $text = @()
+        $text += @(Get-Content $o.FullName -ErrorAction SilentlyContinue)
+        $text += @(Get-Content $e.FullName -ErrorAction SilentlyContinue)
+        [pscustomobject]@{
+            TimedOut = -not $exited
+            ExitCode = if ($exited) { $p.ExitCode } else { $null }
+            Output   = $text
+        }
+    } finally {
+        Remove-Item $o.FullName, $e.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-Guest {
-    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Command)
-    ssh.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes "$guestUser@$Ip" $Command
-    if ($LASTEXITCODE -ne 0) { throw "guest command failed ($LASTEXITCODE): $Command" }
+    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Command, [int]$TimeoutSec = 1800)
+    $r = Invoke-Bounded -Exe 'ssh.exe' -Arguments ($sshOpts + @("$guestUser@$Ip", $Command)) -TimeoutSec $TimeoutSec
+    if ($r.Output) { Write-Host ($r.Output -join "`n") }
+    if ($r.TimedOut) { throw "guest command exceeded ${TimeoutSec}s and was killed: $Command" }
+    if ($r.ExitCode -ne 0) { throw "guest command failed ($($r.ExitCode)): $Command" }
 }
 
 function Copy-ToGuest {
-    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Local, [Parameter(Mandatory)][string]$Remote)
-    scp.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes $Local "${guestUser}@${Ip}:$Remote"
-    if ($LASTEXITCODE -ne 0) { throw "scp to guest failed: $Local -> $Remote" }
+    param([Parameter(Mandatory)][string]$Ip, [Parameter(Mandatory)][string]$Local, [Parameter(Mandatory)][string]$Remote, [int]$TimeoutSec = 300)
+    $r = Invoke-Bounded -Exe 'scp.exe' -Arguments ($sshOpts + @($Local, "${guestUser}@${Ip}:$Remote")) -TimeoutSec $TimeoutSec
+    if ($r.Output) { Write-Host ($r.Output -join "`n") }
+    if ($r.TimedOut) { throw "scp to guest exceeded ${TimeoutSec}s and was killed: $Local -> $Remote" }
+    if ($r.ExitCode -ne 0) { throw "scp to guest failed: $Local -> $Remote" }
 }
 
 function Wait-GuestSsh {
@@ -130,6 +227,14 @@ try {
 Write-Host '== stage 1: first boot (headless OOBE; SSH comes up when done) =='
 New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 4GB -VHDPath $workVhdx -SwitchName $SwitchName | Out-Null
 try {
+    # Automatic checkpoints are ON by default on Windows client and Server
+    # hosts, and they are silently fatal here: Start-VM takes a checkpoint,
+    # every subsequent write lands in a <name>_<guid>.avhdx differencing disk,
+    # and $workVhdx -- the file this script seals, smoke-tests and packages --
+    # keeps only the pristine base. A build that ran to completion would
+    # publish an image containing none of the updates, toolchain or launcher
+    # it just spent an hour installing, and nothing downstream would notice.
+    Set-VM -Name $vmName -AutomaticCheckpointsEnabled $false
     Set-VMProcessor -VMName $vmName -Count 4
     Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate 'MicrosoftWindows'
     Start-VM -Name $vmName
@@ -141,14 +246,43 @@ try {
     Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'activate.ps1') -Remote 'C:\activate.ps1'
     Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\activate.ps1'
 
+    # --- Stage 2.5: remove Defender, before Windows Update can service it ---
+    # Ordering is deliberate and was moved here from after the toolchain. Left
+    # until later, the update loop installs Defender's own updates for a
+    # component this build then deletes: one real build installed KB5007651
+    # (Windows Security platform) and KB2267602 (definitions) in an early pass,
+    # and was offered KB5007651 again several passes later. That is scan,
+    # download and install time spent on payload that never ships.
+    #
+    # No extra reboot is needed: the feature removal completes on the update
+    # loop's own reboot between passes, or failing that on the pre-launcher
+    # reboot later. The toolchain install is no longer scanned either, which was
+    # the other reason to move it up.
+    #
+    # The risk accepted here is that -Remove strips the component payload before
+    # the big cumulative lands, and Windows servicing is fussy about absent
+    # payload. If a cumulative ever fails to install in stage 3, this ordering
+    # is the first thing to suspect.
+    Write-Host '== stage 2.5: remove Defender =='
+    Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'remove-defender.ps1') -Remote 'C:\remove-defender.ps1'
+    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\remove-defender.ps1'
+
     # --- Stage 3: Windows Update loop (install -> reboot -> repeat until clean) ---
     Write-Host '== stage 3: windows update loop =='
     Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'windows-update.ps1') -Remote 'C:\windows-update.ps1'
     $maxPasses = 8
     for ($pass = 1; $pass -le $maxPasses; $pass++) {
         Write-Host "  update pass $pass..."
-        $out = ssh.exe -i $buildKey -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o BatchMode=yes "$guestUser@$ip" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1'
+        # A pass that overruns is not fatal: the loop's existing reboot-and-retry
+        # is the right response, and partial output is still inspected, because a
+        # pass that reported CLEAN and then failed to close should still count.
+        $passTimeoutSec = 3600
+        $r = Invoke-Bounded -Exe 'ssh.exe' `
+             -Arguments ($sshOpts + @("$guestUser@$ip", 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\windows-update.ps1')) `
+             -TimeoutSec $passTimeoutSec
+        $out = $r.Output
         Write-Host ($out -join "`n")
+        if ($r.TimedOut) { Write-Host "  pass exceeded ${passTimeoutSec}s and was killed; rebooting and retrying" }
         if ($out -match 'WINDOWS_UPDATE: CLEAN') { break }
         if ($pass -eq $maxPasses) { throw "windows update did not converge in $maxPasses passes" }
         Invoke-Guest -Ip $ip -Command 'shutdown /r /t 5'
@@ -165,18 +299,9 @@ try {
         Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\docker-escape-hatch.ps1'
     }
 
-    # Defender comes out here rather than earlier so it rides the reboot below
-    # instead of needing one of its own, and so Windows Update (stage 3) cannot
-    # reinstall the feature after it has been removed. Moving it ahead of the
-    # toolchain would also stop the toolchain install being scanned, at the cost
-    # of one extra reboot -- worth revisiting only if build time starts to hurt.
-    Copy-ToGuest -Ip $ip -Local (Join-Path $scriptsDir 'remove-defender.ps1') -Remote 'C:\remove-defender.ps1'
-    Invoke-Guest -Ip $ip -Command 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\remove-defender.ps1'
-
     # Reboot before the launcher bake: choco installs commonly leave a
     # pending restart (exit 3010), and sealing with one pending would make
     # every clone's first boot finish the install instead of running jobs.
-    # It also completes the Defender feature removal above.
     Write-Host '  rebooting to flush pending toolchain restarts...'
     Invoke-Guest -Ip $ip -Command 'shutdown /r /t 5'
     Start-Sleep -Seconds 30
