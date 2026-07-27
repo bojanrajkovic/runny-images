@@ -106,6 +106,32 @@ try {
         throw 'SMOKE FAIL: Defender engine still present -- the feature removal did not take'
     }
     Write-Host 'smoke: Defender removed'
+
+    # The ReFS work volume is asserted hard HERE, precisely because the launcher
+    # treats a mount failure as non-fatal at runtime. That split is deliberate:
+    # a running guest should not be destroyed over a performance feature, but an
+    # image whose work volume never mounts must not ship at all -- otherwise the
+    # degradation is silent and permanent.
+    $workVhd = "$($osVolume.DriveLetter):\runny\work.vhdx"
+    if (-not (Test-Path $workVhd)) {
+        throw 'SMOKE FAIL: C:\runny\work.vhdx missing -- install-work-volume.ps1 did not run'
+    }
+    Write-Host ('smoke: work volume present ({0:N2} GB on disk)' -f ((Get-Item $workVhd).Length / 1GB))
+
+    # And prove it actually mounted on a real boot, rather than merely existing:
+    # the launcher logs the outcome to runner.log before it waits for a config.
+    $runnerLog = "$($osVolume.DriveLetter):\runny\runner.log"
+    if (-not (Test-Path $runnerLog)) {
+        throw 'SMOKE FAIL: runner.log missing -- the launcher never logged its work-volume result'
+    }
+    $log = Get-Content -Raw $runnerLog
+    if ($log -match 'ReFS work volume mounted') {
+        Write-Host 'smoke: ReFS work volume mounted at boot'
+    } elseif ($log -match 'ReFS work volume unavailable') {
+        throw "SMOKE FAIL: launcher could not mount the ReFS work volume: $($log.Trim())"
+    } else {
+        throw 'SMOKE FAIL: runner.log has no work-volume result -- launcher did not reach the mount step'
+    }
 } finally {
     Dismount-VHD -Path $childVhdx
     Remove-Item -Force $childVhdx
