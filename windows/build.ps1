@@ -104,16 +104,45 @@ $sshOpts = @(
 # failure the caller can act on, which is the same reason the daemon puts a
 # deadline on every guest-facing call rather than enumerating what can go wrong
 # behind it.
+# Start-Process -ArgumentList joins an array with naive quoting: an element that
+# contains double quotes loses them. That matters because guest commands embed
+# them -- `powershell -Command "New-Item ... | Out-Null"` arrived at the guest
+# unquoted, so cmd read the pipe as its own and tried to run Out-Null as a
+# program. Native invocation (ssh.exe @args) got this right, so the quoting has
+# to be reproduced explicitly now that the call goes through Start-Process.
+# This is the CommandLineToArgvW rule: double the backslash run before a quote,
+# escape the quote, and double a trailing backslash run.
+function ConvertTo-NativeArg([string]$Argument) {
+    if ($Argument -ne '' -and $Argument -notmatch '[\s"]') { return $Argument }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $backslashes = 0
+    foreach ($ch in $Argument.ToCharArray()) {
+        if ($ch -eq [char]'\') { $backslashes++; continue }
+        if ($ch -eq [char]'"') {
+            [void]$sb.Append('\' * ($backslashes * 2 + 1)).Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$sb.Append('\' * $backslashes); $backslashes = 0 }
+        [void]$sb.Append($ch)
+    }
+    if ($backslashes -gt 0) { [void]$sb.Append('\' * ($backslashes * 2)) }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
 function Invoke-Bounded {
     param(
         [Parameter(Mandatory)][string]$Exe,
         [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][int]$TimeoutSec
     )
+    $commandLine = (($Arguments | ForEach-Object { ConvertTo-NativeArg $_ }) -join ' ')
     $o = New-TemporaryFile
     $e = New-TemporaryFile
     try {
-        $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -PassThru `
+        $p = Start-Process -FilePath $Exe -ArgumentList $commandLine -NoNewWindow -PassThru `
              -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName
         # Touching Handle while the process is alive is what makes ExitCode
         # readable after it exits. Without it, Start-Process -PassThru yields
